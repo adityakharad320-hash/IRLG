@@ -5,10 +5,13 @@ import { registerCors } from "./plugins/cors.js";
 import { registerErrorHandler } from "./plugins/error-handler.js";
 import { sensiblePlugin } from "./plugins/sensible.js";
 import { v1Routes } from "./routes/v1.js";
+import type { IAuthService } from "./auth/supabase-auth.js";
+import type { IProfileService } from "./services/profile.service.js";
 
 export async function buildApp(
   configOverrides?: Partial<Record<string, unknown>>,
-  existingConfig?: ServerConfig
+  existingConfig?: ServerConfig,
+  services?: { authService?: IAuthService; profileService?: IProfileService }
 ): Promise<FastifyInstance> {
   const appConfig = existingConfig ?? loadConfig(configOverrides);
 
@@ -70,6 +73,8 @@ export async function buildApp(
   await app.register(v1Routes, {
     prefix: appConfig.apiPrefix,
     config: appConfig,
+    authService: services?.authService,
+    profileService: services?.profileService,
   });
 
   return app;

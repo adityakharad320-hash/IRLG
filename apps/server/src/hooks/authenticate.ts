@@ -18,8 +18,16 @@ export function createAuthHook(authService: IAuthService) {
     }
 
     const token = match[1];
-    const user = await authService.verifyToken(token);
-    request.user = user;
+    try {
+      const user = await authService.verifyToken(token);
+      request.user = user;
+    } catch (err) {
+      if (err instanceof AppError) {
+        throw err;
+      }
+      const message = err instanceof Error ? err.message : "Authentication failed";
+      throw AppError.unauthorized(message);
+    }
   };
 }
 

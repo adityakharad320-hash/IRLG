@@ -28,6 +28,28 @@ export interface AuthUser {
   metadata?: Record<string, unknown>;
 }
 
+export interface UserProfile {
+  id: string;
+  displayName: string;
+  avatarUrl?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CurrentUserResponse {
+  user: {
+    id: string;
+    email?: string;
+    role?: string;
+  };
+  profile: UserProfile;
+}
+
+export interface UpdateProfileInput {
+  displayName?: string;
+  avatarUrl?: string | null;
+}
+
 declare module "fastify" {
   interface FastifyRequest {
     user?: AuthUser;

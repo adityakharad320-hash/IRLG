@@ -1,0 +1,14 @@
+{
+  "name": "irlg",
+  "private": true,
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "npm run dev --workspace=@irlg/web",
+    "build": "npm run build --workspace=@irlg/web",
+    "start": "npm run start --workspace=@irlg/web",
+    "lint": "npm run lint --workspace=@irlg/web",
+    "typecheck": "npm run typecheck --workspace=@irlg/web"
+  }
+}

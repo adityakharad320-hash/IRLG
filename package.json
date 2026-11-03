@@ -9,6 +9,18 @@
     "build": "npm run build --workspace=@irlg/web",
     "start": "npm run start --workspace=@irlg/web",
     "lint": "npm run lint --workspace=@irlg/web",
-    "typecheck": "npm run typecheck --workspace=@irlg/web"
+    "typecheck": "npm run typecheck --workspace=@irlg/web",
+    "dev:web": "npm run dev --workspace=@irlg/web",
+    "build:web": "npm run build --workspace=@irlg/web",
+    "start:web": "npm run start --workspace=@irlg/web",
+    "lint:web": "npm run lint --workspace=@irlg/web",
+    "typecheck:web": "npm run typecheck --workspace=@irlg/web",
+    "dev:server": "npm run dev --workspace=@irlg/server",
+    "build:server": "npm run build --workspace=@irlg/server",
+    "start:server": "npm run start --workspace=@irlg/server",
+    "lint:server": "npm run lint --workspace=@irlg/server",
+    "typecheck:server": "npm run typecheck --workspace=@irlg/server",
+    "test:server": "npm run test --workspace=@irlg/server",
+    "test": "npm run test:server"
   }
 }

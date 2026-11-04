@@ -7,6 +7,10 @@ import {
   updateReadiness,
   updateMatchSettings,
   cancelMatch,
+  startMatchPreparation,
+  fetchMyRole,
+  fetchMatchTiming,
+  advanceMatchPhase,
 } from "../src/lib/api/matches";
 
 const VALID_UUID = "550e8400-e29b-41d4-a716-446655440000";
@@ -220,6 +224,115 @@ describe("Web Matches API Client", () => {
 
       const result = await cancelMatch("token-123", VALID_UUID);
       expect(result.status).toBe("CANCELLED");
+    });
+  });
+
+  describe("startMatchPreparation", () => {
+    it("calls POST /matches/:matchId/prepare and returns match with participants", async () => {
+      const mockResult = {
+        match: {
+          id: VALID_UUID,
+          status: "PREPARING",
+          preparationStartedAt: new Date().toISOString(),
+        },
+        participants: [],
+      };
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          success: true,
+          data: mockResult,
+        }),
+      } as unknown as Response);
+
+      const result = await startMatchPreparation("token-123", VALID_UUID);
+      expect(result.match.status).toBe("PREPARING");
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining(`/matches/${VALID_UUID}/prepare`),
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+  });
+
+  describe("fetchMyRole", () => {
+    it("calls GET /matches/:matchId/role and returns private role", async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          success: true,
+          data: { matchId: VALID_UUID, userId: "user-1", role: "HUNTER" },
+        }),
+      } as unknown as Response);
+
+      const result = await fetchMyRole("token-123", VALID_UUID);
+      expect(result.role).toBe("HUNTER");
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining(`/matches/${VALID_UUID}/role`),
+        expect.objectContaining({ method: "GET" })
+      );
+    });
+  });
+
+  describe("fetchMatchTiming", () => {
+    it("calls GET /matches/:matchId/timing and returns canonical countdown timing", async () => {
+      const mockTiming = {
+        matchId: VALID_UUID,
+        status: "PREPARING",
+        serverTime: new Date().toISOString(),
+        preparationDurationSeconds: 300,
+        runnerHeadStartSeconds: 45,
+        matchDurationSeconds: 1500,
+        preparationStartedAt: new Date().toISOString(),
+        countdownStartedAt: null,
+        startedAt: null,
+        phaseRemainingSeconds: 290,
+        hunterReleaseRemainingSeconds: null,
+        matchRemainingSeconds: 1500,
+      };
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          success: true,
+          data: mockTiming,
+        }),
+      } as unknown as Response);
+
+      const result = await fetchMatchTiming("token-123", VALID_UUID);
+      expect(result.status).toBe("PREPARING");
+      expect(result.phaseRemainingSeconds).toBe(290);
+    });
+  });
+
+  describe("advanceMatchPhase", () => {
+    it("calls POST /matches/:matchId/advance with targetStatus", async () => {
+      const mockMatch = {
+        id: VALID_UUID,
+        status: "COUNTDOWN",
+      };
+
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          success: true,
+          data: { match: mockMatch },
+        }),
+      } as unknown as Response);
+
+      const result = await advanceMatchPhase("token-123", VALID_UUID, "COUNTDOWN");
+      expect(result.status).toBe("COUNTDOWN");
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining(`/matches/${VALID_UUID}/advance`),
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ targetStatus: "COUNTDOWN" }),
+        })
+      );
     });
   });
 });

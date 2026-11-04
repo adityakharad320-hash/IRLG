@@ -5,6 +5,7 @@ import { AppError } from "../../utils/errors.js";
 export interface CandidatePlayer {
   userId: string;
   isSpectator: boolean;
+  isWithdrawn?: boolean;
 }
 
 export interface PlayerRoleAssignment {
@@ -55,14 +56,24 @@ function secureShuffle<T>(array: T[]): T[] {
 
 /**
  * Authoritatively assigns HUNTER and RUNNER roles to eligible players.
- * Spectators are excluded from role assignment (assigned null).
+ * Spectators and withdrawn players are excluded from role assignment (assigned null).
+ * Enforces uniqueness of participant IDs and validates hunter count bounds.
  */
 export function assignRoles(
   players: CandidatePlayer[],
   hunterCount: number
 ): PlayerRoleAssignment[] {
-  const eligiblePlayers = players.filter((p) => !p.isSpectator);
-  const spectators = players.filter((p) => p.isSpectator);
+  // Validate participant uniqueness
+  const seenUserIds = new Set<string>();
+  for (const player of players) {
+    if (seenUserIds.has(player.userId)) {
+      throw AppError.badRequest(`Duplicate participant detected: ${player.userId}`);
+    }
+    seenUserIds.add(player.userId);
+  }
+
+  const eligiblePlayers = players.filter((p) => !p.isSpectator && !p.isWithdrawn);
+  const excludedPlayers = players.filter((p) => p.isSpectator || p.isWithdrawn);
 
   validateHunterCount(hunterCount, eligiblePlayers.length);
 
@@ -79,9 +90,9 @@ export function assignRoles(
     });
   }
 
-  for (const spectator of spectators) {
+  for (const excluded of excludedPlayers) {
     assignments.push({
-      userId: spectator.userId,
+      userId: excluded.userId,
       role: null,
     });
   }

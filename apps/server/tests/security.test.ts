@@ -175,6 +175,12 @@ describe("Security Boundaries & Infrastructure Verification", () => {
       cancelMatch: vi.fn(),
       getMatchByInviteCode: vi.fn(),
       joinMatch: vi.fn(),
+      updateReadiness: vi.fn(),
+      updateSettings: vi.fn(),
+      startPreparation: vi.fn(),
+      getMyRole: vi.fn(),
+      getMatchTiming: vi.fn(),
+      advanceMatchPhase: vi.fn(),
     };
 
     const app = await buildApp(

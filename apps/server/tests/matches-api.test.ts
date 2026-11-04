@@ -30,6 +30,10 @@ describe("Matches API Endpoints (/api/v1/matches)", () => {
       joinMatch: vi.fn(),
       updateReadiness: vi.fn(),
       updateSettings: vi.fn(),
+      startPreparation: vi.fn(),
+      getMyRole: vi.fn(),
+      getMatchTiming: vi.fn(),
+      advanceMatchPhase: vi.fn(),
     };
   });
 
@@ -582,6 +586,196 @@ describe("Matches API Endpoints (/api/v1/matches)", () => {
       const json = response.json();
       expect(json.success).toBe(true);
       expect(json.data.match.maxPlayers).toBe(10);
+    });
+  });
+
+  describe("POST /api/v1/matches/:matchId/prepare (Start Preparation)", () => {
+    it("returns 401 when missing authentication", async () => {
+      const app = await buildApp(
+        { NODE_ENV: "test" },
+        undefined,
+        { authService: mockAuthService, matchService: mockMatchService }
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/matches/${VALID_UUID}/prepare`,
+      });
+
+      expect(response.statusCode).toBe(401);
+    });
+
+    it("authoritatively starts preparation and returns updated match", async () => {
+      vi.mocked(mockMatchService.startPreparation).mockResolvedValue({
+        match: {
+          id: VALID_UUID,
+          hostUserId: "auth-user-1",
+          inviteCode: "PREP01",
+          status: "PREPARING",
+          maxPlayers: 12,
+          hunterCount: 2,
+          matchDurationSeconds: 1500,
+          preparationDurationSeconds: 300,
+          runnerHeadStartSeconds: 45,
+          winner: null,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          startedAt: null,
+          completedAt: null,
+          cancelledAt: null,
+          preparationStartedAt: new Date().toISOString(),
+        },
+        participants: [],
+      });
+
+      const app = await buildApp(
+        { NODE_ENV: "test" },
+        undefined,
+        { authService: mockAuthService, matchService: mockMatchService }
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/matches/${VALID_UUID}/prepare`,
+        headers: { authorization: "Bearer valid-token" },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const json = response.json();
+      expect(json.success).toBe(true);
+      expect(json.data.match.status).toBe("PREPARING");
+      expect(mockMatchService.startPreparation).toHaveBeenCalledWith("auth-user-1", VALID_UUID);
+    });
+  });
+
+  describe("GET /api/v1/matches/:matchId/role (Private Role Reveal)", () => {
+    it("returns caller's private gameplay role", async () => {
+      vi.mocked(mockMatchService.getMyRole).mockResolvedValue({
+        matchId: VALID_UUID,
+        userId: "auth-user-1",
+        role: "HUNTER",
+      });
+
+      const app = await buildApp(
+        { NODE_ENV: "test" },
+        undefined,
+        { authService: mockAuthService, matchService: mockMatchService }
+      );
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/matches/${VALID_UUID}/role`,
+        headers: { authorization: "Bearer valid-token" },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const json = response.json();
+      expect(json.success).toBe(true);
+      expect(json.data.role).toBe("HUNTER");
+      expect(mockMatchService.getMyRole).toHaveBeenCalledWith("auth-user-1", VALID_UUID);
+    });
+
+    it("returns 403 Forbidden when nonparticipant queries role", async () => {
+      vi.mocked(mockMatchService.getMyRole).mockRejectedValue(
+        AppError.forbidden("Access denied: You are not a participant in this match")
+      );
+
+      const app = await buildApp(
+        { NODE_ENV: "test" },
+        undefined,
+        { authService: mockAuthService, matchService: mockMatchService }
+      );
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/matches/${VALID_UUID}/role`,
+        headers: { authorization: "Bearer valid-token" },
+      });
+
+      expect(response.statusCode).toBe(403);
+    });
+  });
+
+  describe("GET /api/v1/matches/:matchId/timing (Canonical Timing)", () => {
+    it("returns canonical match timing and countdowns", async () => {
+      vi.mocked(mockMatchService.getMatchTiming).mockResolvedValue({
+        matchId: VALID_UUID,
+        status: "PREPARING",
+        serverTime: new Date().toISOString(),
+        preparationDurationSeconds: 300,
+        runnerHeadStartSeconds: 45,
+        matchDurationSeconds: 1500,
+        preparationStartedAt: new Date().toISOString(),
+        countdownStartedAt: null,
+        startedAt: null,
+        phaseRemainingSeconds: 285,
+        hunterReleaseRemainingSeconds: null,
+        matchRemainingSeconds: 1500,
+      });
+
+      const app = await buildApp(
+        { NODE_ENV: "test" },
+        undefined,
+        { authService: mockAuthService, matchService: mockMatchService }
+      );
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/matches/${VALID_UUID}/timing`,
+        headers: { authorization: "Bearer valid-token" },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const json = response.json();
+      expect(json.success).toBe(true);
+      expect(json.data.phaseRemainingSeconds).toBe(285);
+      expect(mockMatchService.getMatchTiming).toHaveBeenCalledWith("auth-user-1", VALID_UUID);
+    });
+  });
+
+  describe("POST /api/v1/matches/:matchId/advance (Lifecycle Advance)", () => {
+    it("advances match lifecycle when authorized", async () => {
+      vi.mocked(mockMatchService.advanceMatchPhase).mockResolvedValue({
+        id: VALID_UUID,
+        hostUserId: "auth-user-1",
+        inviteCode: "ADV01",
+        status: "COUNTDOWN",
+        maxPlayers: 12,
+        hunterCount: 2,
+        matchDurationSeconds: 1500,
+        preparationDurationSeconds: 300,
+        runnerHeadStartSeconds: 45,
+        winner: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        startedAt: null,
+        completedAt: null,
+        cancelledAt: null,
+        countdownStartedAt: new Date().toISOString(),
+      });
+
+      const app = await buildApp(
+        { NODE_ENV: "test" },
+        undefined,
+        { authService: mockAuthService, matchService: mockMatchService }
+      );
+
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v1/matches/${VALID_UUID}/advance`,
+        headers: { authorization: "Bearer valid-token" },
+        payload: { targetStatus: "COUNTDOWN" },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const json = response.json();
+      expect(json.success).toBe(true);
+      expect(json.data.match.status).toBe("COUNTDOWN");
+      expect(mockMatchService.advanceMatchPhase).toHaveBeenCalledWith(
+        "auth-user-1",
+        VALID_UUID,
+        "COUNTDOWN"
+      );
     });
   });
 });

@@ -162,4 +162,56 @@ describe("Supabase Migration Structure & Security Rules", () => {
     expect(content).toContain("revoke execute on function public.update_match_settings_tx(uuid, uuid, int, int, int) from public, anon, authenticated;");
     expect(content).toContain("grant execute on function public.update_match_settings_tx(uuid, uuid, int, int, int) to service_role;");
   });
+
+  it("contains versioned create_match_participant_roles migration with private role isolation and lifecycle RPCs", () => {
+    const files = fs.readdirSync(rootMigrationsDir);
+    const rolesMigration = files.find((f) => f.includes("create_match_participant_roles.sql"));
+    expect(rolesMigration).toBeDefined();
+
+    const content = fs.readFileSync(path.join(rootMigrationsDir, rolesMigration!), "utf-8");
+
+    // 1. Matches table phase timestamp columns
+    expect(content).toContain("add column if not exists preparation_started_at timestamptz null");
+    expect(content).toContain("add column if not exists countdown_started_at timestamptz null");
+
+    // 2. Private role table structure
+    expect(content).toContain("create table if not exists public.match_participant_roles");
+    expect(content).toContain("references public.matches(id) on delete cascade");
+    expect(content).toContain("references public.match_participants(id) on delete cascade");
+    expect(content).toContain("references auth.users(id) on delete cascade");
+    expect(content).toContain("constraint uq_participant_role_participant unique (participant_id)");
+    expect(content).toContain("constraint uq_participant_role_match_user unique (match_id, user_id)");
+    expect(content).toContain("chk_participant_gameplay_role check");
+    expect(content).toContain("gameplay_role in ('HUNTER', 'RUNNER')");
+
+    // 3. CRITICAL: Table MUST NOT be added to supabase_realtime publication
+    expect(content).not.toContain("alter publication supabase_realtime add table public.match_participant_roles");
+
+    // 4. Row Level Security & Least Privilege
+    expect(content).toContain("alter table public.match_participant_roles enable row level security;");
+    expect(content).toContain("revoke all on table public.match_participant_roles from anon, authenticated;");
+    expect(content).toContain("grant select on table public.match_participant_roles to authenticated;");
+    expect(content).toContain('create policy "Users can view only their own gameplay role"');
+    expect(content).toContain("auth.uid() = user_id");
+    // Verify host does NOT get automatic policy to view all roles
+    expect(content).not.toContain("is_match_host");
+
+    // 5. Atomic start_match_preparation_tx RPC
+    expect(content).toContain("create or replace function public.start_match_preparation_tx");
+    expect(content).toContain("for update");
+    expect(content).toContain("MINIMUM_PLAYERS_NOT_MET");
+    expect(content).toContain("MAX_PLAYERS_EXCEEDED");
+    expect(content).toContain("NOT_ALL_PLAYERS_READY");
+    expect(content).toContain("HUNTER_COUNT_INVALID");
+    expect(content).toContain("p_assignments jsonb");
+    expect(content).toContain("revoke execute on function public.start_match_preparation_tx(uuid, uuid, jsonb) from public, anon, authenticated;");
+    expect(content).toContain("grant execute on function public.start_match_preparation_tx(uuid, uuid, jsonb) to service_role;");
+
+    // 6. Atomic advance_match_lifecycle_tx RPC with 45s Runner head start enforcement
+    expect(content).toContain("create or replace function public.advance_match_lifecycle_tx");
+    expect(content).toContain("HEAD_START_IN_PROGRESS");
+    expect(content).toContain("INVALID_LIFECYCLE_TRANSITION");
+    expect(content).toContain("revoke execute on function public.advance_match_lifecycle_tx(uuid, uuid, text) from public, anon, authenticated;");
+    expect(content).toContain("grant execute on function public.advance_match_lifecycle_tx(uuid, uuid, text) to service_role;");
+  });
 });

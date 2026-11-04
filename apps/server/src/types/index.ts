@@ -73,6 +73,8 @@ export interface Match {
   startedAt: string | null;
   completedAt: string | null;
   cancelledAt: string | null;
+  preparationStartedAt?: string | null;
+  countdownStartedAt?: string | null;
 }
 
 export interface MatchParticipant {
@@ -97,6 +99,30 @@ export interface MatchWithParticipants {
   match: Match;
   participants: MatchParticipant[];
 }
+
+export interface MatchTiming {
+  matchId: string;
+  status: MatchStatus;
+  serverTime: string;
+  preparationDurationSeconds: number;
+  runnerHeadStartSeconds: number;
+  matchDurationSeconds: number;
+  preparationStartedAt: string | null;
+  countdownStartedAt: string | null;
+  startedAt: string | null;
+  phaseRemainingSeconds: number | null;
+  hunterReleaseRemainingSeconds: number | null;
+  matchRemainingSeconds: number | null;
+}
+
+export interface PlayerRoleResponse {
+  matchId: string;
+  userId: string;
+  role: GameplayRole | null;
+  isSpectator?: boolean;
+  isWithdrawn?: boolean;
+}
+
 
 export interface InviteLookupResult {
   matchId: string;

@@ -10,6 +10,11 @@ import {
 } from "../domain/manhunt/constants.js";
 import { assertValidMatchTransition } from "../domain/manhunt/lifecycle.js";
 import { generateInviteCode } from "../domain/manhunt/invite-code.js";
+import {
+  assignRoles,
+  validateHunterCount,
+  type CandidatePlayer,
+} from "../domain/manhunt/role-manager.js";
 import type {
   CreateMatchInput,
   JoinMatchInput,
@@ -21,6 +26,8 @@ import type {
   MatchParticipant,
   MatchWithParticipants,
   InviteLookupResult,
+  MatchTiming,
+  PlayerRoleResponse,
 } from "../types/index.js";
 
 export interface IMatchService {
@@ -31,6 +38,10 @@ export interface IMatchService {
   joinMatch(userId: string, input: JoinMatchInput): Promise<MatchParticipant>;
   updateReadiness(userId: string, matchId: string, input: UpdateReadinessInput): Promise<MatchParticipant>;
   updateSettings(userId: string, matchId: string, input: UpdateSettingsInput): Promise<Match>;
+  startPreparation(userId: string, matchId: string): Promise<MatchWithParticipants>;
+  getMyRole(userId: string, matchId: string): Promise<PlayerRoleResponse>;
+  getMatchTiming(userId: string, matchId: string): Promise<MatchTiming>;
+  advanceMatchPhase(userId: string, matchId: string, targetStatus?: MatchStatus): Promise<Match>;
 }
 
 export interface MatchRow {
@@ -49,6 +60,8 @@ export interface MatchRow {
   started_at: string | null;
   completed_at: string | null;
   cancelled_at: string | null;
+  preparation_started_at?: string | null;
+  countdown_started_at?: string | null;
 }
 
 export interface MatchParticipantRow {
@@ -65,6 +78,17 @@ export interface MatchParticipantRow {
   withdrawn_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface MatchParticipantRoleRow {
+  id: string;
+  match_id: string;
+  participant_id: string;
+  user_id: string;
+  gameplay_role: string;
+  assigned_at: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export function mapMatchRow(row: MatchRow): Match {
@@ -84,6 +108,8 @@ export function mapMatchRow(row: MatchRow): Match {
     startedAt: row.started_at,
     completedAt: row.completed_at,
     cancelledAt: row.cancelled_at,
+    preparationStartedAt: row.preparation_started_at ?? null,
+    countdownStartedAt: row.countdown_started_at ?? null,
   };
 }
 
@@ -282,10 +308,11 @@ export class SupabaseMatchService implements IMatchService {
     }
 
     // Role privacy filtering:
-    // Only the host or post-match results (COMPLETED, RESULTS) allow viewing all roles.
-    // In active/in-progress matches, each participant can ONLY view their own gameplay role.
+    // Only post-match results (COMPLETED, RESULTS) allow viewing all roles.
+    // Host is an administrative role, NOT a gameplay privilege; host CANNOT view other players' roles.
+    // In pre-game/active matches, each participant can ONLY view their own gameplay role.
     const matchStatus = matchData.status as MatchStatus;
-    const canSeeAllRoles = isHost || matchStatus === "COMPLETED" || matchStatus === "RESULTS";
+    const canSeeAllRoles = matchStatus === "COMPLETED" || matchStatus === "RESULTS";
 
     // Attempt to load profiles for participant display names
     const userIds = rawParticipants.map((p) => p.userId);
@@ -811,6 +838,483 @@ export class SupabaseMatchService implements IMatchService {
     }
     if (!updatedMatch) {
       throw AppError.internal("Failed to update match settings record");
+    }
+
+    return mapMatchRow(updatedMatch as MatchRow);
+  }
+
+  /**
+   * Authoritatively transitions a match from LOBBY to PREPARING,
+   * performs cryptographically secure role assignment, and stores roles in the private table.
+   * Host only. Idempotent: safe against concurrent requests.
+   */
+  async startPreparation(userId: string, matchId: string): Promise<MatchWithParticipants> {
+    const client = this.getClient();
+
+    // 1. Fetch match to check existence, host authorization, and status
+    const { data: matchData, error: matchError } = await client
+      .from("matches")
+      .select("*")
+      .eq("id", matchId)
+      .maybeSingle();
+
+    if (matchError) {
+      throw AppError.internal(`Failed to retrieve match: ${matchError.message}`);
+    }
+
+    if (!matchData) {
+      throw AppError.notFound("Match not found");
+    }
+
+    const matchRow = matchData as MatchRow;
+
+    if (matchRow.host_user_id !== userId) {
+      throw AppError.forbidden("Access denied: Only the match host can start match preparation");
+    }
+
+    // Idempotency: If already PREPARING, return current state without reshuffling
+    if (matchRow.status === "PREPARING") {
+      return this.getMatchById(userId, matchId);
+    }
+
+    if (matchRow.status !== "LOBBY") {
+      throw AppError.badRequest(
+        `Cannot start preparation: Match is currently in '${matchRow.status}' status (must be in 'LOBBY')`
+      );
+    }
+
+    // 2. Query participants to validate active player count and readiness
+    const { data: participantsData, error: participantsError } = await client
+      .from("match_participants")
+      .select("*")
+      .eq("match_id", matchId)
+      .order("joined_at", { ascending: true });
+
+    if (participantsError) {
+      throw AppError.internal(`Failed to retrieve participants: ${participantsError.message}`);
+    }
+
+    const rawParticipants = (participantsData as MatchParticipantRow[]) ?? [];
+    const activeParticipants = rawParticipants.filter(
+      (p) => !["SPECTATING", "WITHDRAWN"].includes(p.participation_status)
+    );
+
+    if (activeParticipants.length < MANHUNT_CONFIG.MIN_PLAYERS) {
+      throw AppError.badRequest(
+        `Cannot start match: Minimum of ${MANHUNT_CONFIG.MIN_PLAYERS} eligible active players required, but found ${activeParticipants.length}`
+      );
+    }
+
+    if (activeParticipants.length > matchRow.max_players) {
+      throw AppError.badRequest(
+        `Cannot start match: Active player count (${activeParticipants.length}) exceeds maxPlayers limit (${matchRow.max_players})`
+      );
+    }
+
+    // All eligible active participants must be READY
+    const unreadyParticipants = activeParticipants.filter((p) => p.participation_status !== "READY");
+    if (unreadyParticipants.length > 0) {
+      throw AppError.badRequest(
+        `Cannot start match: All eligible active players must be READY (${unreadyParticipants.length} player(s) not ready)`
+      );
+    }
+
+    // Validate hunter count bounds
+    validateHunterCount(matchRow.hunter_count, activeParticipants.length);
+
+    // 3. Cryptographically secure role assignment
+    const candidatePlayers: CandidatePlayer[] = rawParticipants.map((p) => ({
+      userId: p.user_id,
+      isSpectator: p.participation_status === "SPECTATING",
+      isWithdrawn: p.participation_status === "WITHDRAWN",
+    }));
+
+    const assignments = assignRoles(candidatePlayers, matchRow.hunter_count);
+
+    // 4. Atomic database transaction via RPC if available
+    if (typeof client.rpc === "function") {
+      const { data: rpcData, error: rpcError } = await client.rpc("start_match_preparation_tx", {
+        p_match_id: matchId,
+        p_host_user_id: userId,
+        p_assignments: assignments,
+      });
+
+      if (!rpcError && rpcData) {
+        return this.getMatchById(userId, matchId);
+      }
+
+      if (rpcError) {
+        if (rpcError.code === "PGRST202" || rpcError.message?.includes("not found")) {
+          if (this.config.nodeEnv === "production") {
+            throw AppError.internal(
+              `Atomic database procedure start_match_preparation_tx is missing: ${rpcError.message}`
+            );
+          }
+        } else {
+          if (rpcError.message?.includes("NOT_HOST")) {
+            throw AppError.forbidden("Access denied: Only the match host can start match preparation");
+          }
+          if (rpcError.message?.includes("MINIMUM_PLAYERS_NOT_MET")) {
+            throw AppError.badRequest("Cannot start match: Minimum of 8 eligible active players required");
+          }
+          if (rpcError.message?.includes("NOT_ALL_PLAYERS_READY")) {
+            throw AppError.badRequest("Cannot start match: All eligible active players must be READY");
+          }
+          throw AppError.internal(`Failed to start match preparation: ${rpcError.message}`);
+        }
+      }
+    }
+
+    // Fallback path (dev / testing without database RPC)
+    const now = new Date().toISOString();
+    const roleInserts = assignments
+      .filter((a) => a.role !== null)
+      .map((a) => {
+        const participant = rawParticipants.find((p) => p.user_id === a.userId);
+        return {
+          match_id: matchId,
+          participant_id: participant?.id ?? a.userId,
+          user_id: a.userId,
+          gameplay_role: a.role as string,
+          assigned_at: now,
+        };
+      });
+
+    if (roleInserts.length > 0) {
+      const { error: rolesError } = await client
+        .from("match_participant_roles")
+        .insert(roleInserts);
+
+      if (rolesError && !rolesError.message?.includes("duplicate")) {
+        throw AppError.internal(`Failed to store private role assignments: ${rolesError.message}`);
+      }
+    }
+
+    // Update active participants to ACTIVE
+    await client
+      .from("match_participants")
+      .update({ participation_status: "ACTIVE", updated_at: now })
+      .eq("match_id", matchId)
+      .eq("participation_status", "READY");
+
+    // Update match to PREPARING
+    const { error: updateMatchError } = await client
+      .from("matches")
+      .update({
+        status: "PREPARING",
+        preparation_started_at: now,
+        updated_at: now,
+      })
+      .eq("id", matchId);
+
+    if (updateMatchError) {
+      throw AppError.internal(`Failed to update match status to PREPARING: ${updateMatchError.message}`);
+    }
+
+    return this.getMatchById(userId, matchId);
+  }
+
+  /**
+   * Retrieves the authenticated player's private gameplay role.
+   * Enforces strict role isolation: Player A can never retrieve Player B's role.
+   * Host receives only their own role. Nonparticipants receive 403 Forbidden.
+   */
+  async getMyRole(userId: string, matchId: string): Promise<PlayerRoleResponse> {
+    const client = this.getClient();
+
+    // Verify caller is a participant
+    const { data: participantData, error: participantError } = await client
+      .from("match_participants")
+      .select("*")
+      .eq("match_id", matchId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (participantError) {
+      throw AppError.internal(`Failed to verify participant identity: ${participantError.message}`);
+    }
+
+    if (!participantData) {
+      throw AppError.forbidden("Access denied: You are not a participant in this match");
+    }
+
+    const participant = participantData as MatchParticipantRow;
+
+    if (participant.participation_status === "SPECTATING") {
+      return { matchId, userId, role: null, isSpectator: true };
+    }
+
+    if (participant.participation_status === "WITHDRAWN") {
+      return { matchId, userId, role: null, isWithdrawn: true };
+    }
+
+    // Retrieve caller's private role
+    const { data: roleData, error: roleError } = await client
+      .from("match_participant_roles")
+      .select("*")
+      .eq("match_id", matchId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (roleError) {
+      throw AppError.internal(`Failed to retrieve private role: ${roleError.message}`);
+    }
+
+    if (!roleData) {
+      // Role not yet assigned (e.g. still in LOBBY)
+      return { matchId, userId, role: null };
+    }
+
+    const roleRow = roleData as MatchParticipantRoleRow;
+    return {
+      matchId,
+      userId,
+      role: roleRow.gameplay_role as GameplayRole,
+    };
+  }
+
+  /**
+   * Retrieves canonical match phase and countdown timing.
+   * Authoritatively evaluates phase timers and advances expired phases automatically.
+   */
+  async getMatchTiming(userId: string, matchId: string): Promise<MatchTiming> {
+    const client = this.getClient();
+
+    // Verify match exists
+    const { data: matchData, error: matchError } = await client
+      .from("matches")
+      .select("*")
+      .eq("id", matchId)
+      .maybeSingle();
+
+    if (matchError) {
+      throw AppError.internal(`Failed to retrieve match timing: ${matchError.message}`);
+    }
+
+    if (!matchData) {
+      throw AppError.notFound("Match not found");
+    }
+
+    // Verify authorization: caller must be host or participant
+    const isHost = matchData.host_user_id === userId;
+    if (!isHost) {
+      const { data: participantData } = await client
+        .from("match_participants")
+        .select("id")
+        .eq("match_id", matchId)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (!participantData) {
+        throw AppError.forbidden("Access denied: You are not a participant in this match");
+      }
+    }
+
+    let matchRow = matchData as MatchRow;
+    const now = new Date();
+
+    // Auto-advance expired preparation phase (300s) -> COUNTDOWN
+    if (matchRow.status === "PREPARING" && matchRow.preparation_started_at) {
+      const prepElapsed = Math.floor(
+        (now.getTime() - new Date(matchRow.preparation_started_at).getTime()) / 1000
+      );
+      if (prepElapsed >= matchRow.preparation_duration_seconds) {
+        try {
+          const advanced = await this.advanceMatchPhase(matchRow.host_user_id, matchId, "COUNTDOWN");
+          matchRow = {
+            ...matchRow,
+            status: advanced.status,
+            countdown_started_at: advanced.countdownStartedAt ?? now.toISOString(),
+          };
+        } catch {
+          // Ignore advance error if concurrent
+        }
+      }
+    }
+
+    // Auto-advance expired countdown phase (45s runner head start) -> ACTIVE
+    if (matchRow.status === "COUNTDOWN" && matchRow.countdown_started_at) {
+      const countdownElapsed = Math.floor(
+        (now.getTime() - new Date(matchRow.countdown_started_at).getTime()) / 1000
+      );
+      if (countdownElapsed >= matchRow.runner_head_start_seconds) {
+        try {
+          const advanced = await this.advanceMatchPhase(matchRow.host_user_id, matchId, "ACTIVE");
+          matchRow = {
+            ...matchRow,
+            status: advanced.status,
+            started_at: advanced.startedAt ?? now.toISOString(),
+          };
+        } catch {
+          // Ignore advance error if concurrent
+        }
+      }
+    }
+
+    // Calculate canonical countdowns
+    let phaseRemainingSeconds: number | null = null;
+    let hunterReleaseRemainingSeconds: number | null = null;
+    let matchRemainingSeconds: number | null = null;
+
+    if (matchRow.status === "PREPARING" && matchRow.preparation_started_at) {
+      const prepElapsed = Math.floor(
+        (now.getTime() - new Date(matchRow.preparation_started_at).getTime()) / 1000
+      );
+      phaseRemainingSeconds = Math.max(0, matchRow.preparation_duration_seconds - prepElapsed);
+      matchRemainingSeconds = matchRow.match_duration_seconds;
+    } else if (matchRow.status === "COUNTDOWN" && matchRow.countdown_started_at) {
+      const countdownElapsed = Math.floor(
+        (now.getTime() - new Date(matchRow.countdown_started_at).getTime()) / 1000
+      );
+      phaseRemainingSeconds = Math.max(0, matchRow.runner_head_start_seconds - countdownElapsed);
+      hunterReleaseRemainingSeconds = phaseRemainingSeconds;
+      matchRemainingSeconds = matchRow.match_duration_seconds;
+    } else if (matchRow.status === "ACTIVE" && matchRow.started_at) {
+      const activeElapsed = Math.floor(
+        (now.getTime() - new Date(matchRow.started_at).getTime()) / 1000
+      );
+      phaseRemainingSeconds = Math.max(0, matchRow.match_duration_seconds - activeElapsed);
+      hunterReleaseRemainingSeconds = 0;
+      matchRemainingSeconds = phaseRemainingSeconds;
+    } else if (matchRow.status === "LOBBY") {
+      matchRemainingSeconds = matchRow.match_duration_seconds;
+    } else {
+      phaseRemainingSeconds = 0;
+      hunterReleaseRemainingSeconds = 0;
+      matchRemainingSeconds = 0;
+    }
+
+    return {
+      matchId: matchRow.id,
+      status: matchRow.status as MatchStatus,
+      serverTime: now.toISOString(),
+      preparationDurationSeconds: matchRow.preparation_duration_seconds,
+      runnerHeadStartSeconds: matchRow.runner_head_start_seconds,
+      matchDurationSeconds: matchRow.match_duration_seconds,
+      preparationStartedAt: matchRow.preparation_started_at ?? null,
+      countdownStartedAt: matchRow.countdown_started_at ?? null,
+      startedAt: matchRow.started_at ?? null,
+      phaseRemainingSeconds,
+      hunterReleaseRemainingSeconds,
+      matchRemainingSeconds,
+    };
+  }
+
+  /**
+   * Advances match lifecycle authoritatively.
+   * Host or server operations only.
+   * Strictly enforces that Hunters cannot be released before the 45-second Runner head start completes.
+   */
+  async advanceMatchPhase(
+    userId: string,
+    matchId: string,
+    targetStatus?: MatchStatus
+  ): Promise<Match> {
+    const client = this.getClient();
+
+    const { data: matchData, error: matchError } = await client
+      .from("matches")
+      .select("*")
+      .eq("id", matchId)
+      .maybeSingle();
+
+    if (matchError) {
+      throw AppError.internal(`Failed to retrieve match: ${matchError.message}`);
+    }
+
+    if (!matchData) {
+      throw AppError.notFound("Match not found");
+    }
+
+    const matchRow = matchData as MatchRow;
+
+    if (matchRow.host_user_id !== userId) {
+      throw AppError.forbidden("Access denied: Only the match host can advance match lifecycle");
+    }
+
+    const currentStatus = matchRow.status as MatchStatus;
+    const resolvedTarget = targetStatus ?? (currentStatus === "PREPARING" ? "COUNTDOWN" : "ACTIVE");
+
+    // Idempotent check
+    if (currentStatus === resolvedTarget) {
+      return mapMatchRow(matchRow);
+    }
+
+    assertValidMatchTransition(currentStatus, resolvedTarget);
+
+    const now = new Date();
+
+    // Check head start if transitioning COUNTDOWN -> ACTIVE
+    if (resolvedTarget === "ACTIVE") {
+      if (currentStatus !== "COUNTDOWN") {
+        throw AppError.badRequest(`Cannot transition to ACTIVE from '${currentStatus}'`);
+      }
+
+      if (matchRow.countdown_started_at) {
+        const countdownElapsed = Math.floor(
+          (now.getTime() - new Date(matchRow.countdown_started_at).getTime()) / 1000
+        );
+        if (countdownElapsed < matchRow.runner_head_start_seconds) {
+          throw AppError.badRequest(
+            `Runner head-start period is in progress. Hunters cannot be released before ${matchRow.runner_head_start_seconds} seconds have elapsed (${matchRow.runner_head_start_seconds - countdownElapsed}s remaining)`
+          );
+        }
+      }
+    }
+
+    // Atomic RPC execution if available
+    if (typeof client.rpc === "function") {
+      const { data: rpcData, error: rpcError } = await client.rpc("advance_match_lifecycle_tx", {
+        p_match_id: matchId,
+        p_requester_user_id: userId,
+        p_target_status: resolvedTarget,
+      });
+
+      if (!rpcError && rpcData?.match) {
+        return mapMatchRow(rpcData.match as MatchRow);
+      }
+
+      if (rpcError) {
+        if (rpcError.code === "PGRST202" || rpcError.message?.includes("not found")) {
+          if (this.config.nodeEnv === "production") {
+            throw AppError.internal(
+              `Atomic database procedure advance_match_lifecycle_tx is missing: ${rpcError.message}`
+            );
+          }
+        } else {
+          if (rpcError.message?.includes("HEAD_START_IN_PROGRESS")) {
+            throw AppError.badRequest("Runner head-start period is in progress. Hunters cannot be released early");
+          }
+          throw AppError.internal(`Failed to advance match lifecycle: ${rpcError.message}`);
+        }
+      }
+    }
+
+    // Fallback path
+    const updatePayload: Partial<MatchRow> = {
+      status: resolvedTarget,
+      updated_at: now.toISOString(),
+    };
+
+    if (resolvedTarget === "COUNTDOWN") {
+      updatePayload.countdown_started_at = now.toISOString();
+    } else if (resolvedTarget === "ACTIVE") {
+      updatePayload.started_at = now.toISOString();
+    }
+
+    const { data: updatedMatch, error: updateError } = await client
+      .from("matches")
+      .update(updatePayload)
+      .eq("id", matchId)
+      .select("*")
+      .maybeSingle();
+
+    if (updateError) {
+      throw AppError.internal(`Failed to advance match to '${resolvedTarget}': ${updateError.message}`);
+    }
+
+    if (!updatedMatch) {
+      throw AppError.internal("Failed to update match lifecycle state");
     }
 
     return mapMatchRow(updatedMatch as MatchRow);

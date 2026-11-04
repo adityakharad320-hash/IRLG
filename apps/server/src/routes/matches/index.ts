@@ -10,6 +10,7 @@ import {
   joinMatchSchema,
   updateReadinessSchema,
   updateSettingsSchema,
+  advancePhaseSchema,
 } from "../../domain/manhunt/schemas.js";
 
 export interface MatchRoutesOptions {
@@ -176,6 +177,112 @@ export const matchRoutes: FastifyPluginAsync<MatchRoutesOptions> = async (
       return reply.status(200).send(
         formatSuccessResponse({
           match: cancelledMatch,
+        })
+      );
+    }
+  );
+
+  // POST /api/v1/matches/:matchId/prepare - Start match preparation and assign roles (Host only)
+  fastify.post(
+    "/:matchId/prepare",
+    { preHandler: [requireAuth] },
+    async (request, reply) => {
+      const user = request.user;
+      if (!user) {
+        throw AppError.unauthorized("Authentication required");
+      }
+
+      const parsedParams = matchIdParamSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        throw parsedParams.error;
+      }
+
+      const result = await opts.matchService.startPreparation(
+        user.id,
+        parsedParams.data.matchId
+      );
+
+      return reply.status(200).send(formatSuccessResponse(result));
+    }
+  );
+
+  // GET /api/v1/matches/:matchId/role - Retrieve caller's private gameplay role
+  fastify.get(
+    "/:matchId/role",
+    { preHandler: [requireAuth] },
+    async (request, reply) => {
+      const user = request.user;
+      if (!user) {
+        throw AppError.unauthorized("Authentication required");
+      }
+
+      const parsedParams = matchIdParamSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        throw parsedParams.error;
+      }
+
+      const roleResponse = await opts.matchService.getMyRole(
+        user.id,
+        parsedParams.data.matchId
+      );
+
+      return reply.status(200).send(formatSuccessResponse(roleResponse));
+    }
+  );
+
+  // GET /api/v1/matches/:matchId/timing - Retrieve canonical match phase & countdown timing
+  fastify.get(
+    "/:matchId/timing",
+    { preHandler: [requireAuth] },
+    async (request, reply) => {
+      const user = request.user;
+      if (!user) {
+        throw AppError.unauthorized("Authentication required");
+      }
+
+      const parsedParams = matchIdParamSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        throw parsedParams.error;
+      }
+
+      const timing = await opts.matchService.getMatchTiming(
+        user.id,
+        parsedParams.data.matchId
+      );
+
+      return reply.status(200).send(formatSuccessResponse(timing));
+    }
+  );
+
+  // POST /api/v1/matches/:matchId/advance - Authoritatively advance match lifecycle (Host only)
+  fastify.post(
+    "/:matchId/advance",
+    { preHandler: [requireAuth] },
+    async (request, reply) => {
+      const user = request.user;
+      if (!user) {
+        throw AppError.unauthorized("Authentication required");
+      }
+
+      const parsedParams = matchIdParamSchema.safeParse(request.params);
+      if (!parsedParams.success) {
+        throw parsedParams.error;
+      }
+
+      const parsedBody = advancePhaseSchema.safeParse(request.body ?? {});
+      if (!parsedBody.success) {
+        throw parsedBody.error;
+      }
+
+      const advancedMatch = await opts.matchService.advanceMatchPhase(
+        user.id,
+        parsedParams.data.matchId,
+        parsedBody.data.targetStatus
+      );
+
+      return reply.status(200).send(
+        formatSuccessResponse({
+          match: advancedMatch,
         })
       );
     }

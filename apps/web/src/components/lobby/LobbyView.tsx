@@ -10,6 +10,10 @@ import { LobbyHeader } from "./LobbyHeader";
 import { LobbyRoster } from "./LobbyRoster";
 import { LobbyReadinessToggle } from "./LobbyReadinessToggle";
 import { HostSettingsPanel } from "./HostSettingsPanel";
+import { MatchStartSection } from "./MatchStartSection";
+import { MatchPreparationView } from "./MatchPreparationView";
+import { MatchCountdownView } from "./MatchCountdownView";
+import { MatchActiveView } from "./MatchActiveView";
 import { Alert } from "../ui/Alert";
 import { Button } from "../ui/Button";
 
@@ -86,17 +90,22 @@ export function LobbyView({ matchId }: LobbyViewProps) {
     }
   }, [accessToken, matchId]);
 
-  // Realtime hook: notifications strictly trigger canonical state refetch
+  // Realtime hook: notifications strictly trigger canonical state refetch.
+  // Stays active across LOBBY, PREPARING, COUNTDOWN, and ACTIVE phases.
+  const isTerminated = match?.status === "CANCELLED" || match?.status === "COMPLETED" || match?.status === "RESULTS";
   const { connectionState, refreshNow } = useMatchRealtime({
     matchId,
     accessToken: accessToken ?? null,
     onRefresh: loadCanonicalState,
-    enabled: Boolean(accessToken && match?.status === "LOBBY"),
+    enabled: Boolean(accessToken && match && !isTerminated),
   });
 
   const currentParticipant = participants.find((p) => p.userId === user?.id);
   const isHost = match ? match.hostUserId === user?.id : false;
   const isLobby = match?.status === "LOBBY";
+  const isPreparing = match?.status === "PREPARING";
+  const isCountdown = match?.status === "COUNTDOWN";
+  const isActive = match?.status === "ACTIVE";
   const isCancelled = match?.status === "CANCELLED";
 
   const activeParticipants = participants.filter(
@@ -168,38 +177,85 @@ export function LobbyView({ matchId }: LobbyViewProps) {
         onManualRefresh={refreshNow}
       />
 
-      {/* Readiness Controls for Current Player */}
+      {/* PHASE 1: LOBBY */}
       {isLobby && (
-        <LobbyReadinessToggle
-          participant={currentParticipant}
-          accessToken={session?.access_token ?? ""}
-          isLobby={isLobby}
-          onReadinessUpdated={(updated) => {
-            setParticipants((prev) =>
-              prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p))
-            );
-          }}
-        />
+        <div className="space-y-6">
+          {/* Start Match Preparation Control */}
+          <MatchStartSection
+            match={match}
+            participants={participants}
+            isHost={isHost}
+            accessToken={session?.access_token ?? ""}
+            onPreparationStarted={(updatedMatch, updatedParticipants) => {
+              setMatch(updatedMatch);
+              setParticipants(updatedParticipants);
+            }}
+          />
+
+          {/* Readiness Controls for Current Player */}
+          <LobbyReadinessToggle
+            participant={currentParticipant}
+            accessToken={session?.access_token ?? ""}
+            isLobby={isLobby}
+            onReadinessUpdated={(updated) => {
+              setParticipants((prev) =>
+                prev.map((p) => (p.id === updated.id ? { ...p, ...updated } : p))
+              );
+            }}
+          />
+
+          {/* Host Settings */}
+          {isHost && (
+            <HostSettingsPanel
+              key={`${match.id}-${match.updatedAt}`}
+              match={match}
+              activeCount={activeParticipants.length}
+              accessToken={session?.access_token ?? ""}
+              onSettingsUpdated={(updated) => setMatch(updated)}
+              onMatchCancelled={(cancelled) => setMatch(cancelled)}
+            />
+          )}
+
+          {/* Participant Roster */}
+          <LobbyRoster
+            participants={participants}
+            currentUserId={user?.id}
+            maxPlayers={match.maxPlayers}
+          />
+        </div>
       )}
 
-      {/* Host Controls */}
-      {isHost && isLobby && (
-        <HostSettingsPanel
-          key={`${match.id}-${match.updatedAt}`}
+      {/* PHASE 2: PREPARING (Role Reveal & Strategy Window) */}
+      {isPreparing && (
+        <MatchPreparationView
           match={match}
-          activeCount={activeParticipants.length}
+          participants={participants}
+          currentUserId={user?.id}
+          isHost={isHost}
           accessToken={session?.access_token ?? ""}
-          onSettingsUpdated={(updated) => setMatch(updated)}
-          onMatchCancelled={(cancelled) => setMatch(cancelled)}
+          onMatchUpdated={(updated) => setMatch(updated)}
         />
       )}
 
-      {/* Participant Roster */}
-      <LobbyRoster
-        participants={participants}
-        currentUserId={user?.id}
-        maxPlayers={match.maxPlayers}
-      />
+      {/* PHASE 3: COUNTDOWN (45-second Runner Head Start) */}
+      {isCountdown && (
+        <MatchCountdownView
+          match={match}
+          currentUserId={user?.id}
+          isHost={isHost}
+          accessToken={session?.access_token ?? ""}
+          onMatchUpdated={(updated) => setMatch(updated)}
+        />
+      )}
+
+      {/* PHASE 4: ACTIVE (Hunters Released & Match Active) */}
+      {isActive && (
+        <MatchActiveView
+          match={match}
+          currentUserId={user?.id}
+          accessToken={session?.access_token ?? ""}
+        />
+      )}
 
       <div className="mt-8 text-center">
         <Link

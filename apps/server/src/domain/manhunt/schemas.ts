@@ -134,3 +134,9 @@ export type UpdateSettingsInput = {
   hunterCount?: number;
   matchDurationSeconds?: number;
 };
+
+export const advancePhaseSchema = z.object({
+  targetStatus: z.enum(["COUNTDOWN", "ACTIVE"]).optional(),
+});
+
+export type AdvancePhaseInput = z.infer<typeof advancePhaseSchema>;

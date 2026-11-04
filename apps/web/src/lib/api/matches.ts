@@ -6,6 +6,9 @@ import type {
   JoinMatchInput,
   UpdateSettingsInput,
   ApiResponse,
+  MatchTiming,
+  PlayerRoleResponse,
+  MatchStatus,
 } from "../../types/api";
 import { ApiError, getApiBaseUrl } from "./users";
 
@@ -247,6 +250,168 @@ export async function cancelMatch(
     const errorPayload = !json.success ? json.error : undefined;
     throw new ApiError(
       errorPayload?.message || `Failed to cancel match (status ${response.status})`,
+      response.status,
+      errorPayload?.code || "API_ERROR",
+      errorPayload?.details
+    );
+  }
+
+  return json.data.match;
+}
+
+/**
+ * Initiates match preparation and atomic role assignment. Host only.
+ */
+export async function startMatchPreparation(
+  accessToken: string,
+  matchId: string
+): Promise<MatchWithParticipants> {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}/matches/${matchId}/prepare`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Network error";
+    throw new ApiError(`Failed to connect to backend server: ${msg}`, 0, "NETWORK_ERROR");
+  }
+
+  const json = (await response.json()) as ApiResponse<MatchWithParticipants>;
+
+  if (!response.ok || !json.success) {
+    const errorPayload = !json.success ? json.error : undefined;
+    throw new ApiError(
+      errorPayload?.message || `Failed to start match preparation (status ${response.status})`,
+      response.status,
+      errorPayload?.code || "API_ERROR",
+      errorPayload?.details
+    );
+  }
+
+  return json.data;
+}
+
+/**
+ * Retrieves the authenticated caller's private gameplay role.
+ * Nonparticipants receive 403 Forbidden.
+ */
+export async function fetchMyRole(
+  accessToken: string,
+  matchId: string
+): Promise<PlayerRoleResponse> {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}/matches/${matchId}/role`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+      cache: "no-store",
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Network error";
+    throw new ApiError(`Failed to connect to backend server: ${msg}`, 0, "NETWORK_ERROR");
+  }
+
+  const json = (await response.json()) as ApiResponse<PlayerRoleResponse>;
+
+  if (!response.ok || !json.success) {
+    const errorPayload = !json.success ? json.error : undefined;
+    throw new ApiError(
+      errorPayload?.message || `Failed to retrieve role (status ${response.status})`,
+      response.status,
+      errorPayload?.code || "API_ERROR",
+      errorPayload?.details
+    );
+  }
+
+  return json.data;
+}
+
+/**
+ * Retrieves canonical match phase and countdown timing.
+ */
+export async function fetchMatchTiming(
+  accessToken: string,
+  matchId: string
+): Promise<MatchTiming> {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}/matches/${matchId}/timing`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/json",
+      },
+      cache: "no-store",
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Network error";
+    throw new ApiError(`Failed to connect to backend server: ${msg}`, 0, "NETWORK_ERROR");
+  }
+
+  const json = (await response.json()) as ApiResponse<MatchTiming>;
+
+  if (!response.ok || !json.success) {
+    const errorPayload = !json.success ? json.error : undefined;
+    throw new ApiError(
+      errorPayload?.message || `Failed to retrieve match timing (status ${response.status})`,
+      response.status,
+      errorPayload?.code || "API_ERROR",
+      errorPayload?.details
+    );
+  }
+
+  return json.data;
+}
+
+/**
+ * Authoritatively advances match lifecycle (e.g. PREPARING -> COUNTDOWN -> ACTIVE). Host only.
+ */
+export async function advanceMatchPhase(
+  accessToken: string,
+  matchId: string,
+  targetStatus?: MatchStatus
+): Promise<Match> {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl}/matches/${matchId}/advance`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(targetStatus ? { targetStatus } : {}),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Network error";
+    throw new ApiError(`Failed to connect to backend server: ${msg}`, 0, "NETWORK_ERROR");
+  }
+
+  const json = (await response.json()) as ApiResponse<{ match: Match }>;
+
+  if (!response.ok || !json.success) {
+    const errorPayload = !json.success ? json.error : undefined;
+    throw new ApiError(
+      errorPayload?.message || `Failed to advance match lifecycle (status ${response.status})`,
       response.status,
       errorPayload?.code || "API_ERROR",
       errorPayload?.details

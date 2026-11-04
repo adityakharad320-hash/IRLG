@@ -3,13 +3,16 @@ import type { ServerConfig } from "../config/index.js";
 import { HealthService } from "../services/health.service.js";
 import { SupabaseProfileService, type IProfileService } from "../services/profile.service.js";
 import { SupabaseAuthService, type IAuthService } from "../auth/supabase-auth.js";
+import { SupabaseMatchService, type IMatchService } from "../services/match.service.js";
 import { healthRoutes } from "./health/index.js";
 import { userRoutes } from "./users/index.js";
+import { matchRoutes } from "./matches/index.js";
 
 export interface V1RoutesOptions {
   config: ServerConfig;
   authService?: IAuthService;
   profileService?: IProfileService;
+  matchService?: IMatchService;
 }
 
 export const v1Routes: FastifyPluginAsync<V1RoutesOptions> = async (
@@ -19,6 +22,7 @@ export const v1Routes: FastifyPluginAsync<V1RoutesOptions> = async (
   const healthService = new HealthService(opts.config);
   const authService = opts.authService ?? new SupabaseAuthService(opts.config);
   const profileService = opts.profileService ?? new SupabaseProfileService(opts.config);
+  const matchService = opts.matchService ?? new SupabaseMatchService(opts.config);
 
   // Mount health endpoints: /api/v1/health/live and /api/v1/health/ready
   await fastify.register(healthRoutes, {
@@ -31,5 +35,12 @@ export const v1Routes: FastifyPluginAsync<V1RoutesOptions> = async (
     prefix: "/users",
     authService,
     profileService,
+  });
+
+  // Mount match endpoints: /api/v1/matches
+  await fastify.register(matchRoutes, {
+    prefix: "/matches",
+    authService,
+    matchService,
   });
 };

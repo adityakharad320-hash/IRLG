@@ -1,3 +1,10 @@
+import type {
+  MatchStatus,
+  ParticipantStatus,
+  GameplayRole,
+  MatchWinner,
+} from "../domain/manhunt/constants.js";
+
 export interface ApiSuccessResponse<T> {
   success: true;
   data: T;
@@ -48,6 +55,53 @@ export interface CurrentUserResponse {
 export interface UpdateProfileInput {
   displayName?: string;
   avatarUrl?: string | null;
+}
+
+export interface Match {
+  id: string;
+  hostUserId: string;
+  inviteCode: string;
+  status: MatchStatus;
+  maxPlayers: number;
+  hunterCount: number;
+  matchDurationSeconds: number;
+  preparationDurationSeconds: number;
+  runnerHeadStartSeconds: number;
+  winner: MatchWinner | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+}
+
+export interface MatchParticipant {
+  id: string;
+  matchId: string;
+  userId: string;
+  gameplayRole: GameplayRole | null;
+  participationStatus: ParticipantStatus;
+  isHost: boolean;
+  joinedAt: string;
+  readyAt: string | null;
+  caughtAt: string | null;
+  disconnectedAt: string | null;
+  withdrawnAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  displayName?: string;
+  avatarUrl?: string | null;
+}
+
+export interface MatchWithParticipants {
+  match: Match;
+  participants: MatchParticipant[];
+}
+
+export interface InviteLookupResult {
+  matchId: string;
+  status: MatchStatus;
+  maxPlayers: number;
 }
 
 declare module "fastify" {

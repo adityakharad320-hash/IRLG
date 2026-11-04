@@ -7,11 +7,16 @@ import { sensiblePlugin } from "./plugins/sensible.js";
 import { v1Routes } from "./routes/v1.js";
 import type { IAuthService } from "./auth/supabase-auth.js";
 import type { IProfileService } from "./services/profile.service.js";
+import type { IMatchService } from "./services/match.service.js";
 
 export async function buildApp(
   configOverrides?: Partial<Record<string, unknown>>,
   existingConfig?: ServerConfig,
-  services?: { authService?: IAuthService; profileService?: IProfileService }
+  services?: {
+    authService?: IAuthService;
+    profileService?: IProfileService;
+    matchService?: IMatchService;
+  }
 ): Promise<FastifyInstance> {
   const appConfig = existingConfig ?? loadConfig(configOverrides);
 
@@ -75,6 +80,7 @@ export async function buildApp(
     config: appConfig,
     authService: services?.authService,
     profileService: services?.profileService,
+    matchService: services?.matchService,
   });
 
   return app;

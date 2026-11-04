@@ -1,7 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { checkDatabaseHealth } from "../src/database/health.js";
 import { loadConfig } from "../src/config/index.js";
+import type { IAuthService } from "../src/auth/supabase-auth.js";
+import type { IMatchService } from "../src/services/match.service.js";
 
 describe("Security Boundaries & Infrastructure Verification", () => {
   it("allows CORS from configured origin", async () => {
@@ -133,5 +135,71 @@ describe("Security Boundaries & Infrastructure Verification", () => {
     expect(capturedLog).not.toContain("player-plain-password");
     expect(capturedLog).not.toContain("eyJh...sensitive-role-key");
     expect(capturedLog).toContain('"normalField":"public-value"');
+  });
+
+  it("enforces server authority: client cannot inject hostUserId or spoof status", async () => {
+    const mockAuthService: IAuthService = {
+      verifyToken: vi.fn().mockResolvedValue({
+        id: "authentic-user-123",
+        email: "legit@example.com",
+        role: "authenticated",
+      }),
+    };
+
+    const mockMatchService: IMatchService = {
+      createMatch: vi.fn().mockImplementation((hostUserId) => {
+        // Must receive authentic-user-123 from verified token, not attacker spoofed id
+        expect(hostUserId).toBe("authentic-user-123");
+        return Promise.resolve({
+          match: {
+            id: "match-uuid-1",
+            hostUserId: "authentic-user-123",
+            inviteCode: "MATCH1",
+            status: "LOBBY",
+            maxPlayers: 12,
+            hunterCount: 2,
+            matchDurationSeconds: 1500,
+            preparationDurationSeconds: 300,
+            runnerHeadStartSeconds: 45,
+            winner: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            startedAt: null,
+            completedAt: null,
+            cancelledAt: null,
+          },
+          participants: [],
+        });
+      }),
+      getMatchById: vi.fn(),
+      cancelMatch: vi.fn(),
+      getMatchByInviteCode: vi.fn(),
+      joinMatch: vi.fn(),
+    };
+
+    const app = await buildApp(
+      { NODE_ENV: "test" },
+      undefined,
+      { authService: mockAuthService, matchService: mockMatchService }
+    );
+
+    // Attacker attempts to pass hostUserId and status = 'ACTIVE' in request body
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/matches",
+      headers: { authorization: "Bearer valid-token" },
+      payload: {
+        hostUserId: "attacker-spoofed-user-id",
+        status: "ACTIVE",
+        winner: "HUNTERS",
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(mockMatchService.createMatch).toHaveBeenCalledWith(
+      "authentic-user-123",
+      expect.anything()
+    );
+    await app.close();
   });
 });

@@ -6,10 +6,19 @@ export const ErrorCode = {
   UNAUTHORIZED: "UNAUTHORIZED",
   FORBIDDEN: "FORBIDDEN",
   NOT_FOUND: "NOT_FOUND",
+  CONFLICT: "CONFLICT",
   INTERNAL_SERVER_ERROR: "INTERNAL_SERVER_ERROR",
   SERVICE_UNAVAILABLE: "SERVICE_UNAVAILABLE",
   METHOD_NOT_ALLOWED: "METHOD_NOT_ALLOWED",
   RATE_LIMIT_EXCEEDED: "RATE_LIMIT_EXCEEDED",
+  // Match & Lobby domain error codes
+  MATCH_FULL: "MATCH_FULL",
+  INVALID_INVITE_CODE: "INVALID_INVITE_CODE",
+  MATCH_NOT_FOUND: "MATCH_NOT_FOUND",
+  ALREADY_JOINED: "ALREADY_JOINED",
+  NOT_AUTHORIZED: "NOT_AUTHORIZED",
+  INVALID_MATCH_STATE: "INVALID_MATCH_STATE",
+  INVALID_READINESS_TRANSITION: "INVALID_READINESS_TRANSITION",
 } as const;
 
 export type ErrorCodeType = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -51,6 +60,38 @@ export class AppError extends Error {
 
   static notFound(message = "Resource not found", details?: unknown): AppError {
     return new AppError(404, ErrorCode.NOT_FOUND, message, details);
+  }
+
+  static conflict(message = "Conflict", details?: unknown): AppError {
+    return new AppError(409, ErrorCode.CONFLICT, message, details);
+  }
+
+  static matchFull(message = "Match lobby is full", details?: unknown): AppError {
+    return new AppError(400, ErrorCode.MATCH_FULL, message, details);
+  }
+
+  static invalidInviteCode(message = "Invalid invite code", details?: unknown): AppError {
+    return new AppError(404, ErrorCode.INVALID_INVITE_CODE, message, details);
+  }
+
+  static matchNotFound(message = "Match not found", details?: unknown): AppError {
+    return new AppError(404, ErrorCode.MATCH_NOT_FOUND, message, details);
+  }
+
+  static alreadyJoined(message = "User is already a participant in this match", details?: unknown): AppError {
+    return new AppError(409, ErrorCode.ALREADY_JOINED, message, details);
+  }
+
+  static notAuthorized(message = "Not authorized to perform this action", details?: unknown): AppError {
+    return new AppError(403, ErrorCode.NOT_AUTHORIZED, message, details);
+  }
+
+  static invalidMatchState(message = "Action is not permitted in current match state", details?: unknown): AppError {
+    return new AppError(400, ErrorCode.INVALID_MATCH_STATE, message, details);
+  }
+
+  static invalidReadinessTransition(message = "Invalid readiness transition", details?: unknown): AppError {
+    return new AppError(400, ErrorCode.INVALID_READINESS_TRANSITION, message, details);
   }
 
   static internal(message = "Internal server error", details?: unknown): AppError {

@@ -21,6 +21,7 @@
     "lint:server": "npm run lint --workspace=@irlg/server",
     "typecheck:server": "npm run typecheck --workspace=@irlg/server",
     "test:server": "npm run test --workspace=@irlg/server",
-    "test": "npm run test:server"
+    "test:web": "npm run test --workspace=@irlg/web",
+    "test": "npm run test:server && npm run test:web"
   }
 }
